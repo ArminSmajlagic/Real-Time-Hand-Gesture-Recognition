@@ -15,9 +15,22 @@ from keras.utils import to_categorical
 from tensorflow.python.keras.models import Sequential
 from tensorflow.python.keras.layers import LSTM, Dense
 from tensorflow.python.keras.callbacks import TensorBoard
+
 mp_holistic = mp.solutions.holistic # Holistic model
 
 colors = [(245,117,16), (117,245,16), (16,117,245)]
+
+model = Sequential()
+
+model.add(LSTM(64, return_sequences=True, activation='relu', input_shape=(30,1662)))
+model.add(LSTM(128, return_sequences=True, activation='relu'))
+model.add(LSTM(64, return_sequences=False, activation='relu'))
+model.add(Dense(64, activation='relu'))
+model.add(Dense(32, activation='relu'))
+model.add(Dense(3, activation='softmax'))
+
+model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+
 def prob_viz(res, actions, input_frame, colors):
     output_frame = input_frame.copy()
     for num, prob in enumerate(res):
@@ -28,6 +41,8 @@ def prob_viz(res, actions, input_frame, colors):
 
 def run_camera():
     cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1900)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1000)  
     return cap
 
 def show_capture_image(image):
@@ -78,17 +93,15 @@ def capture_sequnce():
 
                     ret, frame = cap.read()
 
-                    # Make detections - here i detect face,pose and hands using detectors
-                    #frame, results = face_detector.Face.detect_face(frame, holistic)
+                    # Make detections - here I detect face,pose and hands using detectors and store landmarks in result and image in frame
+                    frame, results = face_detector.Face.detect_face(frame, holistic)
                     frame, results = hands_detector.Hands.detect_hands(frame, holistic)
-                    #frame, results = pose_detector.Pose.detect_pose(frame, holistic)
+                    frame, results = pose_detector.Pose.detect_pose(frame, holistic)
                     
-                    # Draw landmarks - here i draw landmarks using landmark_drawer
-                    # drawer.LandmarkDrawer.draw_face_landmarks(frame, results)
-                    drawer.LandmarkDrawer.draw_hands_landmarks(frame, results)
-                    # drawer.LandmarkDrawer.draw_pose_landmarks(frame, results)
+                    # Draw landmarks - here I draw landmarks using landmark_drawer
+                    drawer.LandmarkDrawer.draw_hands_landmarks(frame, results) # here I draw landmarks on my hands
            
-                    # NEW Apply wait logic
+                    # This part draws on the screen to indicate what action am I capturing and when it is capturing
                     if frame_num == 0: 
                         cv2.putText(frame, 'STARTING COLLECTION', (120,200), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255, 0), 4, cv2.LINE_AA)
@@ -99,10 +112,11 @@ def capture_sequnce():
                         cv2.putText(frame, 'Collecting frames for {} Video Number {}'.format(action, sequence), (15,12), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
 
-                    show_capture_image(frame)
+                    show_capture_image(frame) # displaying image in python window
                     
-                    keypoints = extract_keypoints(results)
-                    dfm.FileManager.add_video_to_file(keypoints, action, str(sequence), str(frame_num))
+                    keypoints = extract_keypoints(results) # storing keypoints to local variable
+
+                    dfm.FileManager.add_video_to_file(keypoints, action, str(sequence), str(frame_num)) # storing keypoint into folders
 
                     if cv2.waitKey(10) & 0xFF == ord('q'):
                         break
@@ -112,35 +126,16 @@ def capture_sequnce():
 
 
 
+
 def final():
-        # 1. New detection variables
     sequence = []
-    sentence = []
-    predictions = []
-    threshold = 0.7
-
-    model = Sequential()
-
-    model.add(LSTM(64, return_sequences=True, activation='relu', input_shape=(30,1662)))
-    model.add(LSTM(128, return_sequences=True, activation='relu'))
-    model.add(LSTM(64, return_sequences=False, activation='relu'))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(3, activation='softmax'))
-
-    model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
-
-    cap = cv2.VideoCapture(0)
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1900)
-
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1000)   
-     # Set mediapipe model 
+    cap = run_camera()
+    # Set mediapipe model 
     with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
         while cap.isOpened():
 
             # Read feed
-            ret, image = cap.read()
+            success, image = cap.read()
 
             # Make detections
             image, results = face_detector.Face.detect_face(image, holistic)
@@ -148,41 +143,21 @@ def final():
             image, results = pose_detector.Pose.detect_pose(image, holistic)        
             
             # Draw landmarks
-            #drawer.LandmarkDrawer.draw_hands_landmarks(image, results)
+            drawer.LandmarkDrawer.draw_hands_landmarks(image, results)
             
-            # 2. Prediction logic
+            # Extracting keypoints and storing them in the sequence
             keypoints = extract_keypoints(results)
             sequence.insert(0, keypoints)
             sequence = sequence[:30]
 
-
+            #loading the model saved after the proccess of training
             model.load_weights('action.h5')
 
             if len(sequence) == 30:
-                res = model.predict(np.expand_dims(sequence, axis=0))[0]
-                #print(dfm.actions[np.argmax(res)])
-                
-                
-                # #3. Viz logic
-                # if res[np.argmax(res)] > threshold: 
-                #     if len(sentence) > 0: 
-                #         if dfm.actions[np.argmax(res)] != sentence[-1]:
-                #             sentence.append(dfm.actions[np.argmax(res)])
-                #     else:
-                #         sentence.append(dfm.actions[np.argmax(res)])
-
-                # if len(sentence) > 5: 
-                #     sentence = sentence[-5:]
-
-            # # Viz probabilities
-                image = prob_viz(res, dfm.actions, image, colors)
-                
-            # cv2.rectangle(image, (0,0), (640, 40), (245, 117, 16), -1)
-            # cv2.putText(image, ' '.join(sentence), (3,30), 
-            #             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-            
-            # Show to screen
-            cv2.imshow('OpenCV Feed', image)
+                res = model.predict(np.expand_dims(sequence, axis=0))[0] # trained NN predicting from current keypoints 
+                image = prob_viz(res, dfm.actions, image, colors) # drawing horizontal bar charts that displays probabilitys from prediction
+                       
+            show_capture_image(image) # showing the image in python window
 
             # Break gracefully
             if cv2.waitKey(10) & 0xFF == ord('q'):
@@ -190,25 +165,7 @@ def final():
     cap.release()
     cv2.destroyAllWindows()    
 
-
 def refined():
-
-    sequence = []
-    sentence = []
-    predictions = []
-    threshold = 0.5
-
-    model = Sequential()
-
-    model.add(LSTM(64, return_sequences=True, activation='relu', input_shape=(30, 1662)))
-    model.add(LSTM(128, return_sequences=True, activation='relu', input_shape=(30, 1662)))
-    model.add(LSTM(64, return_sequences=False, activation='relu', input_shape=(30, 1662)))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(dfm.actions.shape[0], activation='softmax')) # 3 output nodes for 3 actions
-
-    model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
-
     cap = cv2.VideoCapture(0)
     # Set mediapipe model 
     with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
